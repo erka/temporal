@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"net"
+	"syscall"
 	"time"
 
 	"go.temporal.io/api/serviceerror"
@@ -13,6 +15,7 @@ import (
 	"go.temporal.io/server/common/metrics"
 	"go.temporal.io/server/common/rpc/interceptor"
 	serviceerrors "go.temporal.io/server/common/serviceerror"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
@@ -58,7 +61,13 @@ const (
 // The hostName syntax is defined in
 // https://github.com/grpc/grpc/blob/master/doc/naming.md.
 // dns resolver is used by default
-func Dial(hostName string, tlsConfig *tls.Config, logger log.Logger, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+func Dial(
+	hostName string,
+	tlsConfig *tls.Config,
+	logger log.Logger,
+	metricsHandler metrics.Handler,
+	opts ...grpc.DialOption,
+) (*grpc.ClientConn, error) {
 	var grpcSecureOpt grpc.DialOption
 	if tlsConfig == nil {
 		grpcSecureOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -77,8 +86,31 @@ func Dial(hostName string, tlsConfig *tls.Config, logger log.Logger, opts ...grp
 	}
 	cp.Backoff.MaxDelay = MaxBackoffDelay
 
+	dtrace := newDialTracer(hostName, metricsHandler, logger)
+
+	contextDialer := func(ctx context.Context, s string) (net.Conn, error) {
+		// Keep the existing gRPC behavior by using OS defaults for TCP keepalive settings.
+		dialer := &net.Dialer{
+			// Disable Go's automatic TCP keep-alive configuration.
+			// We manually enable SO_KEEPALIVE in the Control callback.
+			KeepAlive: time.Duration(-1),
+			Control: func(_, _ string, c syscall.RawConn) error {
+				return c.Control(func(fd uintptr) {
+					unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_KEEPALIVE, 1)
+				})
+			},
+		}
+
+		var ndt *networkDialTrace
+		ctx, ndt = dtrace.beginNetworkDial(ctx)
+		conn, dialErr := dialer.DialContext(ctx, "tcp", s)
+		dtrace.endNetworkDial(ndt, dialErr)
+		return conn, dialErr
+	}
+
 	dialOptions := []grpc.DialOption{
 		grpcSecureOpt,
+		grpc.WithContextDialer(contextDialer),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxInternodeRecvPayloadSize)),
 		grpc.WithChainUnaryInterceptor(
 			headersInterceptor,

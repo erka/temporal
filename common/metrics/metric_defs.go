@@ -652,6 +652,12 @@ var (
 		"wf_too_many_pending_external_workflow_signals",
 		WithDescription("The number of Workflow Tasks failed because they would cause the limit on the number of pending signals to external workflows to be exceeded. See https://t.mp/limits for more information."),
 	)
+	DialAttemptsCount  = NewCounterDef("dial_attempts")
+	DialDNSLatency     = NewTimerDef("dial_dns_latency", WithDescription("Latency of DNS lookup."))
+	DialConnectLatency = NewTimerDef("dial_connect_latency", WithDescription("Latency of TCP connection."))
+	DialSuccessCount   = NewCounterDef("dial_success", WithDescription("The number of successful network connections."))
+	DialErrorCount     = NewCounterDef("dial_error", WithDescription("The number of failed network connections."))
+	DialTLSLatency     = NewTimerDef("dial_tls_latency", WithDescription("Latency of TLS handshake."))
 
 	// Frontend
 	AddSearchAttributesWorkflowSuccessCount  = NewCounterDef("add_search_attributes_workflow_success")
